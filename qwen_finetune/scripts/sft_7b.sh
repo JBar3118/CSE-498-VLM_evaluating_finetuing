@@ -45,7 +45,7 @@ report_to=${REPORT_TO:-"none"}
 args="
     --model_name_or_path "${llm}" \
     --dataset_use ${datasets} \
-    --data_flatten True \
+    --data_flatten False \
     --tune_mm_vision False \
     --tune_mm_mlp True \
     --tune_mm_llm True \

@@ -138,7 +138,7 @@ def train(attn_implementation="flash_attention_2"):
         model_args.model_name_or_path,
     )
 
-    if data_args.data_flatten or data_args.data_packing:
+    if (data_args.data_flatten or data_args.data_packing) and attn_implementation == "flash_attention_2":
         replace_qwen2_vl_attention_class()
     model.config.use_cache = False
 
@@ -203,4 +203,4 @@ def train(attn_implementation="flash_attention_2"):
 
 
 if __name__ == "__main__":
-    train(attn_implementation="flash_attention_2")
+    train(attn_implementation="sdpa")

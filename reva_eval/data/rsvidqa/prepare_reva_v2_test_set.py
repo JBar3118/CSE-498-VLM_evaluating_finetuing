@@ -31,26 +31,101 @@ def get_video_duration(video_path: str) -> float:
 
 def to_abs_path(file_path: str) -> str:
     """Convert an annotation video path to an absolute path under REVA_ROOT."""
-    # TODO(student): remove optional dataset prefixes and join with REVA_ROOT.
-    raise NotImplementedError("TODO: implement to_abs_path")
+    path = file_path
+
+    prefixes = [
+        "#dataset/ReVA_V2/",
+        "#dataset/ReVA/",
+        "ReVA_V2/",
+        "ReVA/",
+    ]
+
+    for prefix in prefixes:
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            break
+
+    return os.path.join(REVA_ROOT, path)
 
 
 def to_rel_stem(file_path: str) -> str:
     """Convert an annotation video path to a relative stem without extension."""
-    # TODO(student): normalize the same prefixes as to_abs_path and strip extension.
-    raise NotImplementedError("TODO: implement to_rel_stem")
+    path = file_path
+
+    prefixes = [
+        "#dataset/ReVA_V2/",
+        "#dataset/ReVA/",
+        "ReVA_V2/",
+        "ReVA/",
+    ]
+
+    for prefix in prefixes:
+        if path.startswith(prefix):
+            path = path[len(prefix):]
+            break
+
+    return os.path.splitext(path)[0]
 
 
 def get_qa_id(qa: dict, video_item: dict, subcategory: str, question_idx: int) -> str:
     """Return a stable QA id for evaluation."""
-    # TODO(student): prefer qa_id, then global_index, otherwise synthesize from video stem.
-    raise NotImplementedError("TODO: implement get_qa_id")
+    if qa.get("qa_id"):
+        return str(qa["qa_id"])
+
+    if qa.get("global_index") is not None:
+        return f"REVA-G{int(qa['global_index']):06d}"
+
+    video_stem = to_rel_stem(video_item["file_path"])
+    safe_stem = video_stem.replace("/", "-")
+
+    return f"REVA-{safe_stem}-{subcategory}-{question_idx:04d}"
 
 
 def iter_flat_items(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Yield flat Qwen-evaluation items from nested ReVA test annotations."""
-    # TODO(student): iterate videos, skip missing/unreadable videos, flatten MCQs.
-    raise NotImplementedError("TODO: implement iter_flat_items")
+    videos = data.get("videos", {})
+
+    for _, video_item in videos.items():
+        file_path = video_item.get("file_path", "")
+        video_path = to_abs_path(file_path)
+
+        if not os.path.exists(video_path):
+            continue
+
+        duration = get_video_duration(video_path)
+
+        if duration <= 0:
+            continue
+
+        video_id = to_rel_stem(file_path)
+        mcq = video_item.get("mcq", {})
+
+        for _, category_data in mcq.items():
+            for question_type, qa_list in category_data.items():
+                for question_idx, qa in enumerate(qa_list):
+                    options = qa.get("options", {})
+
+                    option_lines = []
+                    for label in sorted(options):
+                        option_lines.append(f"{label}. {options[label]}")
+
+                    question_text = qa.get("question", "")
+                    if option_lines:
+                        question_text += "\n" + "\n".join(option_lines)
+
+                    yield {
+                        "id": get_qa_id(
+                            qa,
+                            video_item,
+                            question_type,
+                            question_idx,
+                        ),
+                        "video_id": video_id,
+                        "duration": duration,
+                        "question": question_text,
+                        "answer": str(qa.get("correct_answer", "")).strip().upper(),
+                        "question_type": question_type,
+                    }
 
 
 def main():

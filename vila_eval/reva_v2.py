@@ -28,28 +28,137 @@ def parse_args() -> argparse.Namespace:
 
 def load_instances(question_file: str) -> list[dict[str, Any]]:
     """Flatten nested ReVA annotations into VILA evaluation instances."""
-    # TODO(student): read question_file, flatten instances, and assign stable IDs
-    # using qa_id, then global_index, then video/subcategory/question index.
-    raise NotImplementedError("TODO: implement load_instances")
+    with open(question_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    instances = []
+
+    for video_id, video_item in data.get("videos", {}).items():
+        video_path = video_item.get("file_path", "")
+        dataset_name = video_item.get("dataset_name", "")
+        mcq = video_item.get("mcq", {})
+
+        for category, category_data in mcq.items():
+            for subcategory, qa_list in category_data.items():
+                for question_idx, qa in enumerate(qa_list):
+
+                    if qa.get("qa_id"):
+                        qa_id = str(qa["qa_id"])
+                    elif qa.get("global_index") is not None:
+                        qa_id = f"REVA-G{int(qa['global_index']):06d}"
+                    else:
+                        qa_id = (
+                            f"REVA-{dataset_name}-"
+                            f"{subcategory[:3].upper()}-"
+                            f"{question_idx:04d}"
+                        )
+
+                    instances.append({
+                        "qa_id": qa_id,
+                        "video_id": video_id,
+                        "video_path": video_path,
+                        "dataset_name": dataset_name,
+                        "category": category,
+                        "subcategory": subcategory,
+                        "question": qa.get("question", ""),
+                        "options": qa.get("options", {}),
+                        "correct_answer": str(
+                            qa.get("correct_answer", "")
+                        ).strip().upper(),
+                        "reasoning": qa.get("reasoning", ""),
+                        "example": qa.get("example", ""),
+                    })
+
+    return instances
 
 
 def resolve_video_path(raw_path: str, dataset_root: str, dataset_prefix: str) -> str:
     """Resolve a ReVA annotation path to an existing local video path."""
-    # TODO(student): try raw_path, dataset_root/raw_path, and paths with dataset_prefix removed.
-    raise NotImplementedError("TODO: implement resolve_video_path")
+    candidates = []
 
+    candidates.append(raw_path)
+    candidates.append(os.path.join(dataset_root, raw_path))
+
+    cleaned_path = raw_path
+
+    if dataset_prefix and cleaned_path.startswith(dataset_prefix):
+        cleaned_path = cleaned_path[len(dataset_prefix):]
+        cleaned_path = cleaned_path.lstrip("/")
+
+    prefixes = [
+        "ReVA_V2/",
+        "ReVA/",
+    ]
+
+    for prefix in prefixes:
+        if cleaned_path.startswith(prefix):
+            cleaned_path = cleaned_path[len(prefix):]
+            break
+
+    candidates.append(os.path.join(dataset_root, cleaned_path))
+
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+
+    raise FileNotFoundError(
+        f"Could not resolve video path: {raw_path}"
+    )
 
 def build_prompt(question: str, options: dict[str, str]) -> str:
     """Build the VILA multiple-choice prompt."""
-    # TODO(student): include question, sorted options, and one-letter instruction.
-    raise NotImplementedError("TODO: implement build_prompt")
+    lines = [question]
+
+    for label in sorted(options):
+        lines.append(f"{label}. {options[label]}")
+
+    lines.append(
+        "Answer with only the option letter from the given choices."
+    )
+
+    return "\n".join(lines)
 
 
 def parse_choice(response: str, options: dict[str, str]) -> str | None:
     """Parse a choice letter from VILA raw response."""
-    # TODO(student): robustly parse A/B/C/D from raw output or matching option text.
-    raise NotImplementedError("TODO: implement parse_choice")
+    text = str(response).strip()
+    upper_text = text.upper()
 
+    valid_labels = {str(label).upper() for label in options}
+
+    # Response is only a choice letter
+    if upper_text in valid_labels:
+        return upper_text
+
+    # Look for phrases such as "answer is B" or "answer: B"
+    match = re.search(
+        r"\bANSWER\s*(?:IS|:)?\s*([A-D])\b",
+        upper_text,
+    )
+
+    if match and match.group(1) in valid_labels:
+        return match.group(1)
+
+    # Match the actual option text
+    lower_text = text.lower()
+
+    for label, option_text in options.items():
+        option = str(option_text).strip().lower()
+
+        if option and option == lower_text:
+            return str(label).upper()
+
+    # Match option text contained in a sentence
+    for label, option_text in options.items():
+        option = str(option_text).strip().lower()
+
+        if option and re.search(
+            rf"\b{re.escape(option)}\b",
+            lower_text,
+        ):
+            return str(label).upper()
+
+    return None
 
 def load_existing_predictions(output_path: str) -> dict[str, dict]:
     if not os.path.exists(output_path):
@@ -80,9 +189,77 @@ def save_jsonl(path: str, records: list[dict]) -> None:
 
 def summarize(records: list[dict]) -> dict:
     """Compute total, category, and subcategory accuracy for VILA outputs."""
-    # TODO(student): compute num_questions, num_answered, accuracy, by_category, by_subcategory.
-    raise NotImplementedError("TODO: implement summarize")
+    num_questions = len(records)
+    num_answered = sum(
+        1 for record in records
+        if record.get("pred_letter") is not None
+    )
+    num_correct = sum(
+        1 for record in records
+        if record.get("is_correct", False)
+    )
 
+    accuracy = (
+        num_correct / num_questions
+        if num_questions
+        else 0.0
+    )
+
+    category_stats = {}
+    subcategory_stats = {}
+
+    for record in records:
+        category = record.get("category", "unknown")
+        subcategory = record.get("subcategory", "unknown")
+
+        if category not in category_stats:
+            category_stats[category] = {
+                "num_questions": 0,
+                "num_answered": 0,
+                "num_correct": 0,
+            }
+
+        if subcategory not in subcategory_stats:
+            subcategory_stats[subcategory] = {
+                "num_questions": 0,
+                "num_answered": 0,
+                "num_correct": 0,
+            }
+
+        for stats in (
+            category_stats[category],
+            subcategory_stats[subcategory],
+        ):
+            stats["num_questions"] += 1
+
+            if record.get("pred_letter") is not None:
+                stats["num_answered"] += 1
+
+            if record.get("is_correct", False):
+                stats["num_correct"] += 1
+
+    for stats in category_stats.values():
+        stats["accuracy"] = (
+            stats["num_correct"] / stats["num_questions"]
+            if stats["num_questions"]
+            else 0.0
+        )
+
+    for stats in subcategory_stats.values():
+        stats["accuracy"] = (
+            stats["num_correct"] / stats["num_questions"]
+            if stats["num_questions"]
+            else 0.0
+        )
+
+    return {
+        "num_questions": num_questions,
+        "num_answered": num_answered,
+        "num_correct": num_correct,
+        "accuracy": accuracy,
+        "by_category": category_stats,
+        "by_subcategory": subcategory_stats,
+    }
 
 def main() -> None:
     args = parse_args()

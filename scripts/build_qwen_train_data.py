@@ -38,33 +38,114 @@ def normalize_video_path(file_path: str, video_root: Path | None = None) -> str:
 
 def format_options(options: dict[str, str]) -> str:
     """Return sorted multiple-choice options, one option per line."""
-    # TODO(student): sort option labels and format each line as "A. option text".
-    raise NotImplementedError("TODO: implement format_options")
+    lines = []
+
+    for label in sorted(options):
+        lines.append(f"{label}. {options[label]}")
+
+    return "\n".join(lines)
 
 
 def format_question(question: str, options: dict[str, str], prompt_style: str) -> str:
     """Build the human message used by Qwen SFT."""
-    # TODO(student): call format_options and support "plain" and "reva_eval" styles.
-    raise NotImplementedError("TODO: implement format_question")
+    formatted_options = format_options(options)
+
+    if prompt_style == "plain":
+        return (
+            f"<video>\n"
+            f"Question: {question}\n"
+            f"{formatted_options}"
+        )
+
+    if prompt_style == "reva_eval":
+        return (
+            f"<video>\n"
+            f"Please carefully watch the video and answer the following multiple-choice question.\n"
+            f"Question: {question}\n"
+            f"{formatted_options}\n"
+            f"Please provide your answer in the format <answer> </answer>."
+        )
+
+    raise ValueError(f"Unknown prompt style: {prompt_style}")
 
 
 def format_answer(qa: dict[str, Any], answer_style: str) -> str:
     """Format the assistant target from a ReVA QA item."""
-    # TODO(student): support "letter", "tagged", and "cot_tagged" answer styles.
-    raise NotImplementedError("TODO: implement format_answer")
+    answer = str(qa["correct_answer"]).strip().upper()
+
+    if answer_style == "letter":
+        return f"Answer: {answer}"
+
+    if answer_style == "tagged":
+        return f"<answer>{answer}</answer>"
+
+    if answer_style == "cot_tagged":
+        reasoning = str(qa.get("reasoning", "")).strip()
+        return f"<think>{reasoning}</think><answer>{answer}</answer>"
+
+    raise ValueError(f"Unknown answer style: {answer_style}")
 
 
 def iter_reva_qas(data: dict[str, Any]) -> Iterator[dict[str, Any]]:
     """Yield one flat QA record at a time from nested ReVA annotations."""
-    # TODO(student): iterate videos -> mcq category -> question_type -> qa list.
-    raise NotImplementedError("TODO: implement iter_reva_qas")
+    videos = data.get("videos", {})
 
+    for video_id, video_data in videos.items():
+        file_path = video_data.get("file_path", "")
+        mcq = video_data.get("mcq", {})
+
+        for category, category_data in mcq.items():
+            for question_type, qa_list in category_data.items():
+                for qa in qa_list:
+                    item = dict(qa)
+
+                    item["video_id"] = video_id
+                    item["file_path"] = file_path
+                    item["category"] = category
+                    item["question_type"] = question_type
+
+                    yield item
 
 def convert_item(item: dict[str, Any], args: argparse.Namespace) -> dict[str, Any] | None:
     """Convert one flat ReVA QA item into one Qwen conversation sample."""
-    # TODO(student): normalize video path, optionally check video exists,
-    # build question/answer, return {video, conversations, optional metadata}.
-    raise NotImplementedError("TODO: implement convert_item")
+    video_path = normalize_video_path(item["file_path"], args.video_root)
+
+    if args.require_video:
+        full_video_path = args.video_root / video_path
+        if not full_video_path.exists():
+            return None
+
+    question = format_question(
+        item["question"],
+        item["options"],
+        args.prompt_style,
+    )
+
+    answer = format_answer(item, args.answer_style)
+
+    sample = {
+        "video": video_path,
+        "conversations": [
+            {
+                "from": "human",
+                "value": question,
+            },
+            {
+                "from": "gpt",
+                "value": answer,
+            },
+        ],
+    }
+
+    if args.keep_metadata:
+        sample["metadata"] = {
+            "qa_id": item.get("qa_id"),
+            "video_id": item.get("video_id"),
+            "category": item.get("category"),
+            "question_type": item.get("question_type"),
+        }
+
+    return sample
 
 
 def parse_args() -> argparse.Namespace:

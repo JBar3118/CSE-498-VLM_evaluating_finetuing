@@ -18,27 +18,127 @@ from typing import Any
 
 def extract_answer(text: str) -> str:
     """Extract text inside <answer>...</answer>; fall back to full text."""
-    # TODO(student): use regex with DOTALL, strip whitespace, and return a string.
-    raise NotImplementedError("TODO: implement extract_answer")
+    match = re.search(r"<answer>(.*?)</answer>", text, flags=re.DOTALL | re.IGNORECASE)
+
+    if match:
+        return match.group(1).strip()
+
+    return text.strip()
 
 
 def extract_letter(text: str) -> str:
     """Extract one answer letter A-H from model output."""
-    # TODO(student): normalize case and robustly parse A-H from short or verbose output.
-    raise NotImplementedError("TODO: implement extract_letter")
+    answer_text = extract_answer(text).strip().upper()
+
+    # If the extracted answer is just a letter
+    if re.fullmatch(r"[A-H]", answer_text):
+        return answer_text
+
+    # Look for phrases such as "Answer: C" or "Final answer: C"
+    match = re.search(r"(?:FINAL\s+ANSWER|ANSWER)\s*:\s*([A-H])\b", answer_text)
+    if match:
+        return match.group(1)
+
+    # Look for phrases such as "The answer is C"
+    match = re.search(r"\bANSWER\s+IS\s+([A-H])\b", answer_text)
+    if match:
+        return match.group(1)
+
+    return ""
 
 
 def load_predictions(output_dir: Path) -> dict[str, dict[str, Any]]:
     """Load prediction JSONL files from output_dir, ignoring result.json."""
-    # TODO(student): read every prediction *.json line-by-line and index by item["id"].
-    raise NotImplementedError("TODO: implement load_predictions")
+    predictions = {}
+
+    for file_path in sorted(output_dir.glob("*.json")):
+        if file_path.name == "result.json":
+            continue
+
+        with file_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+
+                if not line:
+                    continue
+
+                item = json.loads(line)
+
+                if "id" in item:
+                    predictions[str(item["id"])] = item
+
+    return predictions
 
 
-def score_predictions(preds: dict[str, dict[str, Any]], gt_list: list[dict[str, Any]]) -> tuple[dict, str]:
+def score_predictions(
+    preds: dict[str, dict[str, Any]],
+    gt_list: list[dict[str, Any]],
+) -> tuple[dict, str]:
     """Score every GT item and report completion separately from accuracy."""
-    # TODO(student): compare predictions against every GT item, count missing predictions
-    # as incorrect, and report Completed plus Total/subcategory accuracy statistics.
-    raise NotImplementedError("TODO: implement score_predictions")
+    results = {}
+    category_stats = defaultdict(lambda: {"correct": 0, "total": 0})
+
+    completed = 0
+    total_correct = 0
+    total_questions = len(gt_list)
+
+    for gt in gt_list:
+        qa_id = str(gt["id"])
+        correct_letter = str(gt.get("answer", "")).strip().upper()
+        question_type = gt.get("question_type", "unknown")
+
+        pred_item = preds.get(qa_id)
+
+        if pred_item is not None:
+            completed += 1
+            pred_letter = extract_letter(str(pred_item.get("pred", "")))
+        else:
+            pred_letter = ""
+
+        acc = int(pred_letter == correct_letter)
+
+        if acc:
+            total_correct += 1
+
+        category_stats[question_type]["correct"] += acc
+        category_stats[question_type]["total"] += 1
+
+        results[qa_id] = {
+            "pred_letter": pred_letter,
+            "answer": correct_letter,
+            "acc": acc,
+            "question_type": question_type,
+        }
+
+    completed_pct = (
+        100.0 * completed / total_questions
+        if total_questions
+        else 0.0
+    )
+
+    total_pct = (
+        100.0 * total_correct / total_questions
+        if total_questions
+        else 0.0
+    )
+
+    lines = [
+        f"Completed: {completed}/{total_questions} = {completed_pct:.2f}%",
+        f"Total: {total_correct}/{total_questions} = {total_pct:.2f}%",
+    ]
+
+    for category in sorted(category_stats):
+        correct = category_stats[category]["correct"]
+        total = category_stats[category]["total"]
+        percentage = 100.0 * correct / total if total else 0.0
+
+        lines.append(
+            f"{category}: {correct}/{total} = {percentage:.2f}%"
+        )
+
+    csv_text = "\n".join(lines) + "\n"
+
+    return results, csv_text
 
 
 def parse_args() -> argparse.Namespace:
